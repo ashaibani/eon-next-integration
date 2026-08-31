@@ -92,6 +92,14 @@ async def main():
     stub = StubApi({
         "AccountTariff": tariff_payload,
         "ApplicableRates": rate_payload,
+        "ConsumptionEstimates": {"data": {"consumptionEstimates": {
+            "low": {"elecAnnualConsumptionStandard": 1600, "elecAnnualConsumptionDay": 1102, "elecAnnualConsumptionNight": 798, "gasAnnualConsumption": 6000},
+            "medium": {"elecAnnualConsumptionStandard": 2500, "elecAnnualConsumptionDay": 1972, "elecAnnualConsumptionNight": 1428, "gasAnnualConsumption": 9500},
+            "high": {"elecAnnualConsumptionStandard": 3800, "elecAnnualConsumptionDay": 3538, "elecAnnualConsumptionNight": 2562, "gasAnnualConsumption": 14000}}}},
+        "AccountBills": {"data": {"viewer": {"accounts": [
+            {"number": "A-123", "bills": {"edges": [
+                {"node": {"__typename": "PeriodBasedDocumentType", "id": "doc1", "fromDate": "2025-10-01", "toDate": "2026-08-27", "issuedDate": "2026-08-31"}}
+            ]}}]}}},
     })
     acc = EnergyAccount(stub, "A-123")
     acc.electricity_mpan = "1900000000001"

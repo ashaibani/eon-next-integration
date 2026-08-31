@@ -4,6 +4,7 @@ import logging
 from datetime import datetime as dt
 
 from homeassistant.components.sensor import (
+    RestoreSensor,
     SensorDeviceClass,
     SensorEntity,
     SensorStateClass
@@ -64,9 +65,8 @@ class EonNextCoordinatorEntity(CoordinatorEntity, SensorEntity):
 
     Entities never call the API: all fetching happens in the coordinator,
     and an API failure marks the coordinator - and so every one of these
-    entities - unavailable, with the last good state preserved for the
-    recorder. This is the graceful failure approach used by the Octopus
-    Energy integration.
+    entities - unavailable, with the last good state preserved. This is the
+    graceful-failure pattern used by the Octopus Energy integration.
     """
 
     def __init__(self, coordinator, entry):
@@ -121,6 +121,10 @@ async def async_setup_entry(hass, config_entry, async_add_entities):
             entities.append(GasPriceSensor(tariff_coordinator, config_entry))
             entities.append(GasStandingChargeSensor(tariff_coordinator, config_entry))
 
+        if show_usage == True and account.electricity_mpan != None:
+            entities.append(BillingDocumentSensor(tariff_coordinator, config_entry))
+            entities.append(AnnualEstimatesSensor(tariff_coordinator, config_entry))
+
         for meter in account.meters:
 
             if meter.latest_reading != None:
@@ -130,8 +134,10 @@ async def async_setup_entry(hass, config_entry, async_add_entities):
                     entities.append(LatestElectricKwhSensor(readings_coordinator, config_entry, meter))
 
                     if show_usage == True:
-                        entities.append(ElectricityUsageDailySensor(readings_coordinator, config_entry, meter))
-                        entities.append(ElectricityCostDailySensor(rates_coordinator, readings_coordinator, config_entry, meter))
+                        entities.append(UsageDaySensor(readings_coordinator, config_entry, meter))
+                        entities.append(UsageNightSensor(readings_coordinator, config_entry, meter))
+                        entities.append(UsageTotalSensor(readings_coordinator, config_entry, meter))
+                        entities.append(CostDaySensor(rates_coordinator, config_entry, meter))
 
                 if meter.get_type() == METER_TYPE_GAS:
                     entities.append(LatestGasCubicMetersSensor(readings_coordinator, config_entry, meter))
@@ -401,6 +407,191 @@ class GasStandingChargeSensor(EonNextCoordinatorEntity):
         }
 
 
+class BillingDocumentSensor(EonNextCoordinatorEntity):
+    """The newest billing document (bill or statement) on the account"""
+
+    def __init__(self, coordinator, entry):
+        super().__init__(coordinator, entry)
+
+        self._attr_name = self.account.account_number + " Latest Billing Document"
+        self._attr_icon = "mdi:file-document-outline"
+        self._attr_entity_category = EntityCategory.DIAGNOSTIC
+        self._attr_unique_id = self.account.account_number + "__" + "latest_billing_document"
+        self._attr_device_info = _account_device(self.account)
+    
+
+    @property
+    def native_value(self):
+        doc = self.account.latest_document
+        if doc == None:
+            return None
+        label = "Bill" if doc.get("document_type") == "PeriodBasedDocumentType" else "Statement"
+        return label + " issued " + str(doc.get("issued"))
+    
+
+    @property
+    def extra_state_attributes(self):
+        doc = self.account.latest_document
+        if doc == None:
+            return {}
+        return {
+            "document_type": doc.get("document_type"),
+            "id": doc.get("id"),
+            "period_from": doc.get("from"),
+            "period_to": doc.get("to"),
+            "issued": doc.get("issued"),
+        }
+
+
+class AnnualEstimatesSensor(EonNextCoordinatorEntity):
+    """E.ON's estimate of your annual consumption (medium profile)
+    with the low/medium/high spread in attributes"""
+
+    def __init__(self, coordinator, entry):
+        super().__init__(coordinator, entry)
+
+        self._attr_name = self.account.account_number + " Annual Consumption Estimate"
+        self._attr_device_class = SensorDeviceClass.ENERGY
+        self._attr_native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
+        self._attr_state_class = SensorStateClass.TOTAL
+        self._attr_icon = "mdi:chart-bar"
+        self._attr_unique_id = self.account.account_number + "__" + "annual_estimates"
+        self._attr_device_info = _account_device(self.account)
+    
+
+    @property
+    def native_value(self):
+        medium = self.account.annual_estimates.get("medium") or {}
+        # Two-register meters: day+night. Single-register: standard.
+        day = medium.get("elecAnnualConsumptionDay")
+        night = medium.get("elecAnnualConsumptionNight")
+        if day != None and night != None:
+            return day + night
+        return medium.get("elecAnnualConsumptionStandard")
+    
+
+    @property
+    def extra_state_attributes(self):
+        estimates = self.account.annual_estimates
+        low = estimates.get("low") or {}
+        medium = estimates.get("medium") or {}
+        high = estimates.get("high") or {}
+        return {
+            "annual_kwh_medium": medium,
+            "annual_kwh_low": low,
+            "annual_kwh_high": high,
+            "note": "E.ON's own estimates - annual kWh by band; gas included in gasAnnualConsumption",
+        }
+
+
+class UsageDaySensor(EonNextMeterCoordinatorEntity):
+    """Day-register usage for the latest published reading day, with the
+    standing-charge-inclusive day/night cost in attributes."""
+
+    def __init__(self, coordinator, entry, meter):
+        super().__init__(coordinator, entry, meter)
+
+        self._attr_name = self.meter.get_serial() + " Electricity Usage Day"
+        self._attr_device_class = SensorDeviceClass.ENERGY
+        self._attr_native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
+        self._attr_state_class = SensorStateClass.TOTAL
+        self._attr_suggested_display_precision = 3
+        self._attr_icon = "mdi:weather-sunny"
+        self._attr_unique_id = self.meter.get_serial() + "__" + "usage_day"
+        self._attr_device_info = _meter_device(meter)
+    
+
+    def _entry(self):
+        return self.account.get_latest_usage()
+    
+
+    @property
+    def native_value(self):
+        entry = self._entry()
+        if entry == None:
+            return None
+        return entry.get("day_kwh")
+    
+
+    @property
+    def extra_state_attributes(self):
+        entry = self._entry()
+        if entry == None:
+            return {}
+        return {
+            "for_date": entry["date"],
+            "cost_gbp": entry.get("cost_gbp"),
+            "cost_basis": entry.get("cost_basis"),
+        }
+
+
+class UsageNightSensor(EonNextMeterCoordinatorEntity):
+    """Night-register usage for the latest day"""
+
+    def __init__(self, coordinator, entry, meter):
+        super().__init__(coordinator, entry, meter)
+
+        self._attr_name = self.meter.get_serial() + " Electricity Usage Night"
+        self._attr_device_class = SensorDeviceClass.ENERGY
+        self._attr_native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
+        self._attr_state_class = SensorStateClass.TOTAL
+        self._attr_suggested_display_precision = 3
+        self._attr_icon = "mdi:weather-night"
+        self._attr_unique_id = self.meter.get_serial() + "__" + "usage_night"
+        self._attr_device_info = _meter_device(meter)
+    
+
+    @property
+    def native_value(self):
+        entry = self._entry()
+        if entry == None:
+            return None
+        return entry.get("night_kwh")
+
+
+class UsageTotalSensor(EonNextMeterCoordinatorEntity):
+    """Total usage for the latest published reading day, with the
+    standing-charge-inclusive estimated cost"""
+
+    def __init__(self, coordinator, entry, meter):
+        super().__init__(coordinator, entry, meter)
+
+        self._attr_name = self.meter.get_serial() + " Electricity Usage Total"
+        self._attr_device_class = SensorDeviceClass.ENERGY
+        self._attr_native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
+        self._attr_state_class = SensorStateClass.TOTAL
+        self._attr_suggested_display_precision = 3
+        self._attr_icon = "mdi:lightning-bolt-outline"
+        self._attr_unique_id = self.meter.get_serial() + "__" + "usage_total"
+        self._attr_device_info = _meter_device(meter)
+    
+
+    def _entry(self):
+        return self.account.get_latest_usage()
+    
+
+    @property
+    def native_value(self):
+        entry = self._entry()
+        if entry == None:
+            return None
+        return entry.get("total_kwh")
+    
+
+    @property
+    def extra_state_attributes(self):
+        entry = self._entry()
+        if entry == None:
+            return {}
+        return {
+            "for_date": entry["date"],
+            "day_kwh": entry.get("day_kwh"),
+            "night_kwh": entry.get("night_kwh"),
+            "cost_gbp": entry.get("cost_gbp"),
+            "cost_basis": entry.get("cost_basis"),
+        }
+
+
 class PrepayCreditSensor(EonNextCoordinatorEntity):
     """Smart prepay meter credit - the figure the E.ON Next app shows."""
 
@@ -548,103 +739,6 @@ class LatestElectricKwhSensor(EonNextMeterCoordinatorEntity):
         return self.meter.latest_reading
 
 
-class ElectricityUsageDailySensor(EonNextMeterCoordinatorEntity):
-    """Estimated consumption for the latest register day (register delta).
-    Register values update daily, so this is yesterday-facing, not live."""
-
-    def __init__(self, coordinator, entry, meter):
-        super().__init__(coordinator, entry, meter)
-
-        self._attr_name = self.meter.get_serial() + " Electricity Usage Daily"
-        self._attr_device_class = SensorDeviceClass.ENERGY
-        self._attr_native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
-        self._attr_state_class = SensorStateClass.TOTAL
-        self._attr_suggested_display_precision = 3
-        self._attr_icon = "mdi:lightning-bolt-outline"
-        self._attr_unique_id = self.meter.get_serial() + "__" + "elec_usage_daily"
-        self._attr_device_info = _meter_device(meter)
-    
-
-    def _latest_entry(self):
-        return self.meter.get_latest_history_entry()
-    
-
-    @property
-    def native_value(self):
-        entry = self._latest_entry()
-        if entry == None:
-            return None
-        return self.meter.get_usage_for_date(entry["date"])
-    
-
-    @property
-    def extra_state_attributes(self):
-        entry = self._latest_entry()
-        if entry == None:
-            return {}
-        
-        return {
-            "for_date": str(entry["date"]),
-            "register_reading_kwh": entry["reading"],
-            "history_days": len(self.meter.reading_history),
-        }
-
-
-class ElectricityCostDailySensor(EonNextCoordinatorEntity):
-    """Estimated cost of the latest register day's electricity, using the
-    duration-weighted rate for that day. An estimate, clearly labelled."""
-
-    def __init__(self, rates_coordinator, readings_coordinator, entry, meter):
-        super().__init__(rates_coordinator, entry)
-        self.meter = meter
-
-        self._attr_name = self.meter.get_serial() + " Electricity Cost Daily (Est)"
-        self._attr_device_class = SensorDeviceClass.MONETARY
-        self._attr_native_unit_of_measurement = "GBP"
-        self._attr_state_class = SensorStateClass.TOTAL
-        self._attr_suggested_display_precision = 2
-        self._attr_icon = "mdi:cash-check"
-        self._attr_unique_id = self.meter.get_serial() + "__" + "elec_cost_daily"
-        self._attr_device_info = _meter_device(meter)
-    
-
-    def _usage_for_latest_day(self):
-        history = self.meter.reading_history
-        if len(history) == 0:
-            return None, None
-        
-        entry = history[-1]
-        return entry["date"], self.meter.get_usage_for_date(entry["date"])
-    
-
-    @property
-    def native_value(self):
-        target_date, usage = self._usage_for_latest_day()
-        if target_date == None or usage == None:
-            return None
-        
-        blended = self.account.get_blended_rate_pence_for_date(target_date)
-        if blended == None:
-            return None
-        
-        return round(usage * blended / 100.0, 2)
-    
-
-    @property
-    def extra_state_attributes(self):
-        target_date, usage = self._usage_for_latest_day()
-        if target_date == None:
-            return {}
-        
-        blended = self.account.get_blended_rate_pence_for_date(target_date)
-        return {
-            "for_date": str(target_date),
-            "usage_kwh": usage,
-            "blended_rate_pence": blended,
-            "estimate": True,
-        }
-
-
 class LatestGasKwhSensor(EonNextMeterCoordinatorEntity):
     """Cumulative gas register converted to kWh. total_increasing makes it
     usable as the "gas consumption" source on the Energy dashboard."""
@@ -664,8 +758,6 @@ class LatestGasKwhSensor(EonNextMeterCoordinatorEntity):
 
     @property
     def native_value(self):
-        # Snapshot the kwh conversion without triggering an API call:
-        # the readings coordinator keeps latest_reading current.
         if self.meter.latest_reading == None:
             return None
         

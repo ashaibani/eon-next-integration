@@ -181,6 +181,51 @@ TARIFF_QUERY = (
 )
 
 
+# Root-level reading history: every published daily register reading for a
+# meter, including both registers on two-rate (Economy 7 style) meters.
+# This is what makes per-day usage possible; the in-app readings query used
+# previously only surfaced the newest register.
+READING_HISTORY_ROOT_QUERY = (
+    "query MeterReadingHistory($accountNumber: String!, $meterId: String!, $readFrom: DateTime!) {\n"
+    "  electricityMeterReadings(accountNumber: $accountNumber, meterId: $meterId, readFrom: $readFrom, first: 40) {\n"
+    "    edges {\n"
+    "      node {\n"
+    "        readAt\n"
+    "        registers {\n"
+    "          name\n"
+    "          value\n"
+    "        }\n"
+    "      }\n"
+    "    }\n"
+    "  }\n"
+    "}"
+)
+
+# Account billing documents (annual bills and statements), newest first.
+BILLS_QUERY = (
+    "query AccountBills {\n"
+    "  viewer {\n"
+    "    accounts {\n"
+    "      ... on AccountType {\n"
+    "        number\n"
+    "        bills(first: 5) {\n"
+    "          edges {\n"
+    "            node {\n"
+    "              __typename\n"
+    "              id\n"
+    "              fromDate\n"
+    "              toDate\n"
+    "              issuedDate\n"
+    "            }\n"
+    "          }\n"
+    "        }\n"
+    "      }\n"
+    "    }\n"
+    "  }\n"
+    "}"
+)
+
+
 class EonNext:
 
     def __init__(self):
@@ -500,6 +545,102 @@ class EonNext:
         return result['data']['prepayBalanceSnapshot']
     
 
+    async def fetch_electricity_reading_history(self, account_number: str, meter_id: str, days: int = 30) -> list:
+        """Daily smart-meter register readings (oldest first):
+        [{"date": "YYYY-MM-DD", "registers": {"Day": 4211.1, "Night": 2674.0}}].
+        Two-register meters include Day and Night; single-register meters
+        use whatever register names the API returns."""
+        read_from = (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=days)).strftime("%Y-%m-%dT00:00:00+00:00")
+
+        result = await self._graphql_post(
+            "MeterReadingHistory",
+            READING_HISTORY_ROOT_QUERY,
+            {
+                "accountNumber": account_number,
+                "meterId": meter_id,
+                "readFrom": read_from
+            }
+        )
+
+        rows = []
+        edges = ((result or {}).get("data") or {}).get("electricityMeterReadings") or {}
+        for edge in (edges.get("edges") or []):
+            node = edge.get("node") or {}
+            read_at = node.get("readAt")
+            if read_at == None:
+                continue
+
+            registers = {}
+            for reg in (node.get("registers") or []):
+                try:
+                    registers[str(reg.get("name"))] = float(reg.get("value"))
+                except (TypeError, ValueError):
+                    continue
+
+            rows.append({"date": str(read_at)[:10], "registers": registers})
+
+        rows.sort(key=lambda r: r["date"])
+        return rows
+    
+
+    ANNUAL_ESTIMATES_QUERY = (
+    "query ConsumptionEstimates {"
+    "  consumptionEstimates {"
+    "    low { elecAnnualConsumptionStandard elecAnnualConsumptionDay elecAnnualConsumptionNight gasAnnualConsumption }"
+    "    medium { elecAnnualConsumptionStandard elecAnnualConsumptionDay elecAnnualConsumptionNight gasAnnualConsumption }"
+    "    high { elecAnnualConsumptionStandard elecAnnualConsumptionDay elecAnnualConsumptionNight gasAnnualConsumption }"
+    "  }"
+    "}"
+)
+
+    async def fetch_consumption_estimates(self) -> dict:
+        """Account-level annual consumption estimates (low/medium/high), with
+        day/night splits for two-rate electricity meters."""
+        result = await self._graphql_post(
+            "ConsumptionEstimates",
+            self.ANNUAL_ESTIMATES_QUERY,
+        )
+
+        estimates = ((result or {}).get("data") or {}).get("consumptionEstimates")
+        if estimates == None:
+            return {}
+
+        return estimates
+    
+
+    async def fetch_latest_document(self, account_number: str):
+        """The newest billing document (bill or statement) on the account:
+        {"document_type", "id", "from", "to", "issued"} or None."""
+        result = await self._graphql_post("AccountBills", BILLS_QUERY)
+
+        accounts = ((result or {}).get("data") or {}).get("viewer") or {}
+        accounts = accounts.get("accounts") or []
+
+        newest = None
+        for account in accounts:
+            if account.get("number") != None and account.get("number") != account_number:
+                continue
+
+            for edge in ((account.get("bills") or {}).get("edges") or []):
+                node = edge.get("node") or {}
+                issued = node.get("issuedDate")
+                if issued == None:
+                    continue
+
+                candidate = {
+                    "document_type": node.get("__typename"),
+                    "id": node.get("id"),
+                    "from": node.get("fromDate"),
+                    "to": node.get("toDate"),
+                    "issued": issued
+                }
+
+                if newest == None or str(candidate["issued"]) > str(newest["issued"]):
+                    newest = candidate
+
+        return newest
+    
+
     async def __init_accounts(self):
         self.__reset_accounts()
 
@@ -556,6 +697,10 @@ class EnergyAccount:
         self.rate_windows = []
         self._last_tariff_fetch = None
         self._last_rates_fetch = None
+        self.usage_history = []
+        self._last_usage_fetch = None
+        self.latest_document = None
+        self.annual_estimates = {}
 
         self.gas_calorific_value = DEFAULT_GAS_CALORIFIC_VALUE
         self.low_credit_pence = DEFAULT_LOW_CREDIT_PENCE
@@ -601,20 +746,186 @@ class EnergyAccount:
         return self.__amount_from_value(self.balance)
     
 
+    USAGE_REFRESH_SECONDS = 3600
+
+    async def refresh_usage_history(self, force: bool = False) -> None:
+        """Per-day usage from the root reading history (Day/Night registers),
+        with locally-computed cost per day: day units x day window rate,
+        night units x night window rate, plus the daily standing charge.
+        Throttled to at most every hour. Requires both a meter and rates."""
+
+        now = datetime.datetime.now()
+        if force == False and self._last_usage_fetch != None:
+            elapsed = (now - self._last_usage_fetch).total_seconds()
+            if elapsed < self.USAGE_REFRESH_SECONDS:
+                return
+
+        meter = None
+        for candidate in self.meters:
+            if candidate.get_type() == METER_TYPE_ELECTRIC:
+                meter = candidate
+                break
+
+        if meter == None:
+            return
+
+        rows = await self.api.fetch_electricity_reading_history(
+            self.account_number, meter.meter_id, 30)
+
+        # Deltas between consecutive published readings
+        history = []
+        previous = None
+        for row in rows:
+            registers = row["registers"]
+            day = registers.get("Day")
+            night = registers.get("Night")
+            total = sum(registers.values())
+
+            entry = {"date": row["date"], "day_kwh": None, "night_kwh": None, "total_kwh": None}
+
+            if previous != None:
+                prev_total = sum(previous.values())
+                delta = round(total - prev_total, 3)
+                if delta >= 0:
+                    entry["total_kwh"] = delta
+
+                    # Two-register meters: name-based split, falling back to a
+                    # 60/40 day/night heuristic only when names are unusable.
+                    prev_day = previous.get("Day")
+                    prev_night = previous.get("Night")
+                    if prev_day != None and day != None:
+                        entry["day_kwh"] = round(registers["Day"] - prev_day, 3)
+                    if prev_night != None and night != None:
+                        entry["night_kwh"] = round(registers["Night"] - prev_night, 3)
+
+            history.append(entry)
+            previous = registers
+
+        # Costs: apply per-date blended windows + standing charge
+        tariff = (self.tariff or {}).get("electricity") or {}
+        standing_pence = tariff.get("standingCharge")
+
+        for entry in history:
+            if entry["total_kwh"] == None:
+                continue
+
+            try:
+                target = datetime.date.fromisoformat(entry["date"])
+            except ValueError:
+                continue
+
+            blended = self.get_blended_rate_pence_for_date(target)
+
+            if entry["day_kwh"] != None and entry["night_kwh"] != None and self.rate_windows:
+                # Two-rate: match registers to the day's windows by value
+                day_rate = self.get_day_rate_pence_for_date(target)
+                night_rate = self.get_night_rate_pence_for_date(target)
+                cost = 0.0
+                used = False
+                if day_rate != None and entry["day_kwh"] != None:
+                    cost = cost + entry["day_kwh"] * day_rate
+                    used = True
+                if night_rate != None and entry["night_kwh"] != None:
+                    cost = cost + entry["night_kwh"] * night_rate
+                    used = True
+                if standing_pence != None:
+                    cost = cost + standing_pence
+                    used = True
+                if used:
+                    entry["cost_gbp"] = round(cost / 100.0, 2)
+                    entry["cost_basis"] = "day/night windows + standing charge"
+            elif blended != None:
+                cost = entry["total_kwh"] * blended
+                if standing_pence != None:
+                    cost = cost + standing_pence
+                entry["cost_gbp"] = round(cost / 100.0, 2)
+                entry["cost_basis"] = "blended rate + standing charge"
+
+        self.usage_history = history
+        self._last_usage_fetch = now
+    
+
+    def get_day_rate_pence_for_date(self, target_date):
+        """Higher of the day's rate windows (the "day" band on two-rate tariffs)."""
+        info = self._rates_for_date(target_date)
+        if len(info) == 0:
+            return None
+        return max(w["pence"] for w in info)
+    
+
+    def get_night_rate_pence_for_date(self, target_date):
+        """Lower of the day's rate windows; None on flat tariffs."""
+        info = self._rates_for_date(target_date)
+        if len(info) == 0:
+            return None
+        return min(w["pence"] for w in info)
+    
+
+    def _rates_for_date(self, target_date):
+        """Rate windows intersecting a calendar date."""
+        if len(self.rate_windows) == 0 or target_date == None:
+            return []
+        
+        day_start = datetime.datetime(target_date.year, target_date.month, target_date.day, tzinfo=datetime.timezone.utc)
+        day_end = day_start + datetime.timedelta(days=1)
+        
+        out = []
+        for window in self.rate_windows:
+            try:
+                wf = datetime.datetime.fromisoformat(str(window["from"]))
+                wt = datetime.datetime.fromisoformat(str(window["to"])) if window.get("to") else None
+            except ValueError:
+                continue
+            
+            if wf.tzinfo == None:
+                wf = wf.replace(tzinfo=datetime.timezone.utc)
+            if wt != None and wt.tzinfo == None:
+                wt = wt.replace(tzinfo=datetime.timezone.utc)
+            
+            if wf < day_end and (wt == None or wt > day_start):
+                out.append(window)
+        
+        return out
+    
+
+    def get_usage_for_date(self, target_date):
+        """{"day_kwh", "night_kwh", "total_kwh", "cost_gbp", "cost_basis"} for a
+        calendar date from the usage history, or None."""
+        for entry in self.usage_history:
+            if entry["date"] == str(target_date):
+                return entry
+        return None
+    
+
+    def get_latest_usage(self):
+        """The most recent usage entry, or None."""
+        if len(self.usage_history) == 0:
+            return None
+        return self.usage_history[-1]
+    
+
     async def refresh_balance(self, force: bool = False) -> None:
         """Re-fetch this account's ledger balance via the API."""
         await self.api.refresh_account_balances(force=force)
     
 
     async def refresh_readings(self, force: bool = False) -> None:
-        """Refresh every meter's cumulative register. Meters gate themselves
-        to one real fetch per day (after 7am) via _should_update()."""
+        """Register + usage refresh. The register gates to one real fetch per
+        day (after 7am) via _should_update(); tariff/rates/usage keep their
+        own gates (6h/1h/1h) even when the coordinator forces - they are
+        loaded independently and do not need per-cycle freshness."""
+        if self.electricity_mpan != None:
+            await self.refresh_tariff()
+            await self.refresh_rates()
+
         for meter in self.meters:
             if force == True:
                 await meter._update()
                 meter.last_updated = datetime.datetime.now()
             else:
                 await meter.update()
+
+        await self.refresh_usage_history()
     
 
     def __amount_from_value(self, value):
@@ -665,6 +976,11 @@ class EnergyAccount:
                 return
 
         self.tariff = await self.api.fetch_account_tariff(self.account_number)
+        self.annual_estimates = await self.api.fetch_consumption_estimates()
+        try:
+            self.latest_document = await self.api.fetch_latest_document(self.account_number)
+        except EonNextApiError:
+            _LOGGER.debug("Billing document fetch failed for %s", self.account_number)
         self._last_tariff_fetch = now
     
 
