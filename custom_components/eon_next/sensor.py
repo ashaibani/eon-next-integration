@@ -592,6 +592,46 @@ class UsageTotalSensor(EonNextMeterCoordinatorEntity):
         }
 
 
+class CostDaySensor(EonNextMeterCoordinatorEntity):
+    """Estimated cost for the latest published reading day: day units x day
+    band, night units x night band, plus the daily standing charge.
+    Labelled an estimate because the server-side per-day costing query
+    (gbrCostOfUsage) is not available to prepay products."""
+
+    def __init__(self, coordinator, entry, meter):
+        super().__init__(coordinator, entry, meter)
+
+        self._attr_name = self.meter.get_serial() + " Electricity Cost Day (Est)"
+        self._attr_device_class = SensorDeviceClass.MONETARY
+        self._attr_native_unit_of_measurement = "GBP"
+        self._attr_state_class = SensorStateClass.TOTAL
+        self._attr_suggested_display_precision = 2
+        self._attr_icon = "mdi:cash-check"
+        self._attr_unique_id = self.meter.get_serial() + "__" + "cost_day_est"
+        self._attr_device_info = _meter_device(meter)
+
+    @property
+    def native_value(self):
+        entry = self.account.get_latest_usage()
+        if entry == None:
+            return None
+        return entry.get("cost_gbp")
+
+    @property
+    def extra_state_attributes(self):
+        entry = self.account.get_latest_usage()
+        if entry == None:
+            return {}
+        return {
+            "for_date": entry["date"],
+            "day_kwh": entry.get("day_kwh"),
+            "night_kwh": entry.get("night_kwh"),
+            "total_kwh": entry.get("total_kwh"),
+            "cost_basis": entry.get("cost_basis"),
+            "estimate": True,
+        }
+
+
 class PrepayCreditSensor(EonNextCoordinatorEntity):
     """Smart prepay meter credit - the figure the E.ON Next app shows."""
 

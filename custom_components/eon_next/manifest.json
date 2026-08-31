@@ -1,15 +1,13 @@
 {
     "domain": "eon_next",
     "name": "Eon Next",
-    "codeowners": [
-        "@ashaibani"
-    ],
+    "codeowners": ["@madmachinations"],
     "config_flow": true,
     "dependencies": [],
-    "documentation": "https://github.com/ashaibani/eon-next-integration/blob/main/README.md",
+    "documentation": "https://gitlab.com/home-assistant-components/eon-next/-/blob/main/README.md",
     "integration_type": "hub",
     "iot_class": "cloud_polling",
-    "issue_tracker": "https://github.com/ashaibani/eon-next-integration/issues",
+    "issue_tracker": "https://github.com/madmachinations/eon-next/issues",
     "requirements": [],
     "version": "0.7.0"
-}
+  }
