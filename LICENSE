@@ -2,13 +2,6 @@ MIT License
 
 Copyright (c) 2026 ashaibani
 
-Derivative work. Heavily inspired by, and building upon,
-madmachinations/eon-next (https://github.com/madmachinations/eon-next),
-which carries no licence file at the time of writing. That project's
-reverse-engineering of the E.ON Next API surface made this integration
-possible and this repository would not exist without it. Any omission of
-credit is unintentional and will be corrected on notice.
-
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
 in the Software without restriction, including without limitation the rights
@@ -26,3 +19,14 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+---------------------------------------------------------------------------
+
+Note on origin (not part of the licence grant above)
+
+This is a derivative work. It is heavily inspired by, and builds upon,
+madmachinations/eon-next (https://github.com/madmachinations/eon-next),
+which carried no licence file at the time of writing. That project's
+reverse-engineering of the E.ON Next API surface made this integration
+possible, and this repository would not exist without it. Any omission of
+credit is unintentional and will be corrected on notice.
