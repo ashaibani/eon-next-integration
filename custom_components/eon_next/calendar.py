@@ -34,7 +34,7 @@ class RatesCalendarEntity(CoordinatorEntity, CalendarEntity):
 
     def __init__(self, coordinator, entry):
         super().__init__(coordinator)
-        self._entry = entry
+        self._config_entry = entry
 
         self._attr_name = self.account.account_number + " Electricity Rates"
         self._attr_unique_id = self.account.account_number + "__" + "rates_calendar"

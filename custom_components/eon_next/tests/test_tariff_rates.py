@@ -70,6 +70,7 @@ rate_payload = {
         {"node": {"value": "14.75250", "validFrom": utc_stamp(0, 30), "validTo": utc_stamp(7, 30)}},
         {"node": {"value": "30.09300", "validFrom": utc_stamp(7, 30), "validTo": utc_stamp(23, 0)}},
         {"node": {"value": "14.75250", "validFrom": utc_stamp(23, 0), "validTo": utc_stamp(0, 30, 1)}},
+        {"node": {"value": "30.09300", "validFrom": utc_stamp(0, 30, 1), "validTo": utc_stamp(23, 0, 1)}},
     ]}}
 }
 
@@ -119,7 +120,7 @@ async def main():
     check("tariff throttle holds", len(stub.calls) == calls_before)
 
     await acc.refresh_rates()
-    check("rate windows loaded", len(acc.rate_windows) == 5)
+    check("rate windows loaded", len(acc.rate_windows) == 6)
     check("rate windows sorted", acc.rate_windows[0]["from"] < acc.rate_windows[-1]["from"])
     check("rate pence parsed as float", isinstance(acc.rate_windows[0]["pence"], float))
 

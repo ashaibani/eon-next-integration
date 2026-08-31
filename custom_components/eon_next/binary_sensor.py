@@ -29,7 +29,7 @@ class EonNextBinaryBase(CoordinatorEntity, BinarySensorEntity):
 
     def __init__(self, coordinator, entry):
         super().__init__(coordinator)
-        self._entry = entry
+        self._config_entry = entry
 
     @property
     def account(self):

@@ -71,7 +71,7 @@ class EonNextCoordinatorEntity(CoordinatorEntity, SensorEntity):
 
     def __init__(self, coordinator, entry):
         super().__init__(coordinator)
-        self._entry = entry
+        self._config_entry = entry
 
     @property
     def account(self):
@@ -84,6 +84,10 @@ class EonNextMeterCoordinatorEntity(EonNextCoordinatorEntity):
     def __init__(self, coordinator, entry, meter):
         super().__init__(coordinator, entry)
         self.meter = meter
+
+    def _usage_entry(self):
+        """The latest per-day usage entry from the usage history, or None."""
+        return self.account.get_latest_usage()
 
 
 async def async_setup_entry(hass, config_entry, async_add_entities):
@@ -501,13 +505,9 @@ class UsageDaySensor(EonNextMeterCoordinatorEntity):
         self._attr_device_info = _meter_device(meter)
     
 
-    def _entry(self):
-        return self.account.get_latest_usage()
-    
-
     @property
     def native_value(self):
-        entry = self._entry()
+        entry = self._usage_entry()
         if entry == None:
             return None
         return entry.get("day_kwh")
@@ -515,7 +515,7 @@ class UsageDaySensor(EonNextMeterCoordinatorEntity):
 
     @property
     def extra_state_attributes(self):
-        entry = self._entry()
+        entry = self._usage_entry()
         if entry == None:
             return {}
         return {
@@ -543,7 +543,7 @@ class UsageNightSensor(EonNextMeterCoordinatorEntity):
 
     @property
     def native_value(self):
-        entry = self._entry()
+        entry = self._usage_entry()
         if entry == None:
             return None
         return entry.get("night_kwh")
@@ -566,13 +566,9 @@ class UsageTotalSensor(EonNextMeterCoordinatorEntity):
         self._attr_device_info = _meter_device(meter)
     
 
-    def _entry(self):
-        return self.account.get_latest_usage()
-    
-
     @property
     def native_value(self):
-        entry = self._entry()
+        entry = self._usage_entry()
         if entry == None:
             return None
         return entry.get("total_kwh")
@@ -580,7 +576,7 @@ class UsageTotalSensor(EonNextMeterCoordinatorEntity):
 
     @property
     def extra_state_attributes(self):
-        entry = self._entry()
+        entry = self._usage_entry()
         if entry == None:
             return {}
         return {
