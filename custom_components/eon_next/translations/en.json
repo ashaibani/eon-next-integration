@@ -1,0 +1,42 @@
+{
+    "config": {
+        "error": {
+            "cannot_connect": "Failed to connect to the E.ON Next service",
+            "invalid_auth": "Authentication failed"
+        },
+        "step": {
+            "user": {
+                "data": {
+                    "email": "Email address",
+                    "password": "Password"
+                },
+                "description": "Login to your E.ON Next account.",
+                "title": "Login"
+            }
+        }
+    },
+    "options": {
+        "step": {
+            "init": {
+                "title": "E.ON Next options",
+                "data": {
+                    "show_rates": "Show tariff and rate sensors",
+                    "show_balance": "Show account balance sensor",
+                    "show_usage": "Show daily usage and cost estimate sensors",
+                    "show_prepay": "Show prepay credit sensors",
+                    "low_credit_pence": "Low credit alert threshold (pence)",
+                    "gas_calorific_value": "Gas calorific value (CV, typically 37.5 to 39.5)",
+                    "balance_refresh_minutes": "Account balance refresh interval (minutes)",
+                    "rates_refresh_minutes": "Tariff rate refresh interval (minutes)",
+                    "prepay_refresh_minutes": "Prepay balance refresh interval (minutes)"
+                }
+            }
+        }
+    },
+    "issues": {
+        "prepay_stale": {
+            "title": "Prepay meter {serial} stopped reporting",
+            "description": "The smart prepay meter {serial} has not reported a balance snapshot: {reason}. Top-ups may not reach the meter automatically. Check the meter display, or contact E.ON Next if this persists."
+        }
+    }
+}
