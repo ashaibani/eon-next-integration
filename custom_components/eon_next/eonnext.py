@@ -695,6 +695,7 @@ class EnergyAccount:
         self.gas_mprn = None
         self.tariff = {}
         self.rate_windows = []
+        self._rate_ranges = []
         self._last_tariff_fetch = None
         self._last_rates_fetch = None
         self.usage_history = []
@@ -816,16 +817,17 @@ class EnergyAccount:
 
             blended = self.get_blended_rate_pence_for_date(target)
 
-            if entry["day_kwh"] != None and entry["night_kwh"] != None and self.rate_windows:
-                # Two-rate: match registers to the day's windows by value
+            if entry["day_kwh"] != None and entry["night_kwh"] != None:
+                # Two-rate: units x band rate. A unit cost is only complete
+                # when BOTH bands have rate cover; billing night units at
+                # the day rate would overstate the estimate.
                 day_rate = self.get_day_rate_pence_for_date(target)
                 night_rate = self.get_night_rate_pence_for_date(target)
+                unit_complete = day_rate != None and night_rate != None
                 cost = 0.0
                 used = False
-                if day_rate != None and entry["day_kwh"] != None:
+                if unit_complete:
                     cost = cost + entry["day_kwh"] * day_rate
-                    used = True
-                if night_rate != None and entry["night_kwh"] != None:
                     cost = cost + entry["night_kwh"] * night_rate
                     used = True
                 if standing_pence != None:
@@ -833,7 +835,10 @@ class EnergyAccount:
                     used = True
                 if used:
                     entry["cost_gbp"] = round(cost / 100.0, 2)
-                    entry["cost_basis"] = "day/night windows + standing charge"
+                    if unit_complete:
+                        entry["cost_basis"] = "day/night windows + standing charge"
+                    else:
+                        entry["cost_basis"] = "standing charge only - unit rate windows not covering both bands"
             elif blended != None:
                 cost = entry["total_kwh"] * blended
                 if standing_pence != None:
@@ -999,11 +1004,15 @@ class EnergyAccount:
                 return
 
         tz = datetime.timezone.utc
-        day_start = (now - datetime.timedelta(days=1)).strftime("%Y-%m-%dT00:00:00+00:00")
+        # Seven days of lookback so per-day usage costing still has rate
+        # cover for the newest published register (published with a lag);
+        # the API honours multi-day ranges.
+        day_start = (now - datetime.timedelta(days=7)).strftime("%Y-%m-%dT00:00:00+00:00")
         day_end = (now + datetime.timedelta(days=2)).strftime("%Y-%m-%dT00:00:00+00:00")
 
         self.rate_windows = await self.api.fetch_applicable_rates(
             self.account_number, self.electricity_mpan, day_start, day_end)
+        self._rate_ranges = [(day_start, day_end)]
 
         if len(self.rate_windows) > 0:
             self._last_rates_fetch = now

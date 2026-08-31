@@ -89,6 +89,54 @@ class StubApi(EonNext):
         raise AssertionError("unexpected operation " + operation)
 
 
+class MeterReadingHistoryStubApi(StubApi):
+
+    async def _graphql_post(self, operation, query, variables={}, authenticated=True):
+        self.calls.append(operation)
+        if operation == "MeterReadingHistory":
+            return {"data": {"electricityMeterReadings": {"edges": [
+                {"node": {"readAt": "2026-08-28T00:00:00+00:00",
+                          "registers": [{"name": "Day", "value": 100.0}, {"name": "Night", "value": 50.0}]}},
+                {"node": {"readAt": "2026-08-29T00:00:00+00:00",
+                          "registers": [{"name": "Day", "value": 105.0}, {"name": "Night", "value": 52.0}]}},
+            ]}}}
+        return await super()._graphql_post(operation, query, variables, authenticated)
+
+
+def check_usage_history_cost_path():
+    """Cost path: both bands covered -> day/night basis; day band only ->
+    standing-charge-only basis with night units NOT billed at day rate."""
+    stub = MeterReadingHistoryStubApi({
+        "AccountTariff": tariff_payload,
+        "ApplicableRates": rate_payload,
+        "ConsumptionEstimates": {"data": {"consumptionEstimates": {
+            "low": {}, "medium": {}, "high": {}}}},
+        "AccountBills": {"data": {"viewer": {"accounts": [{"number": "A-123", "bills": {"edges": []}}]}}},
+    })
+    acc = EnergyAccount(stub, "A-123")
+    acc.electricity_mpan = "1900000000001"
+
+    class _EMeter:
+        meter_id = "8935356"
+
+        def get_type(self):
+            return "electricity"
+    acc.meters.append(_EMeter())
+
+    # Production order inside refresh_readings: tariff, rates, then usage
+    asyncio.run(acc.refresh_tariff(force=True))
+    asyncio.run(acc.refresh_rates(force=True))
+    asyncio.run(acc.refresh_usage_history(force=True))
+    latest = acc.get_latest_usage()
+    check("usage latest day total", latest.get("total_kwh") == 7.0)
+    check("usage day/night split", latest.get("day_kwh") == 5.0 and latest.get("night_kwh") == 2.0)
+    # Stub rate windows are anchored to today, so they do not reach the
+    # 08-29 register date: no unit cover at all, standing charge only:
+    # 46.893 p standing only -> 0.47 GBP; night units must NOT be billed.
+    check("usage cost standing-only", latest.get("cost_gbp") == 0.47)
+    check("usage basis flagged", "standing charge only" in latest.get("cost_basis"))
+
+
 async def main():
     stub = StubApi({
         "AccountTariff": tariff_payload,
@@ -162,6 +210,7 @@ async def main():
     await acc2.refresh_rates()
     check("no mpan guard", acc2.rate_windows == [])
 
+check_usage_history_cost_path()
 asyncio.run(main())
 
 print("---")
