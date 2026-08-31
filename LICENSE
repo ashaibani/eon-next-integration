@@ -19,14 +19,3 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
-
----------------------------------------------------------------------------
-
-Note on origin (not part of the licence grant above)
-
-This is a derivative work. It is heavily inspired by, and builds upon,
-madmachinations/eon-next (https://github.com/madmachinations/eon-next),
-which carried no licence file at the time of writing. That project's
-reverse-engineering of the E.ON Next API surface made this integration
-possible, and this repository would not exist without it. Any omission of
-credit is unintentional and will be corrected on notice.
