@@ -221,6 +221,24 @@ async def main():
     check("ledger value refreshed", elec.prepay_credit_pence == 1228)
     check("debt ledger refreshed", elec.prepay_debt_pence == 75)
 
+    # 7b. History seeding from multi-edge payloads (restart resilience):
+    # the API returns up to 12 readings; usage must work right after a
+    # restart without waiting for a NEW reading to publish.
+    multi = StubApi({"meterReadingsHistoryTableElectricityReadings": {
+        "data": {"readings": {"edges": [
+            {"node": {"readAt": "2026-08-31T10:00:00+00:00", "registers": [{"name": "1", "value": "4211.181"}]}},
+            {"node": {"readAt": "2026-08-30T10:00:00+00:00", "registers": [{"name": "1", "value": "4205.0"}]}},
+            {"node": {"readAt": "2026-08-29T10:00:00+00:00", "registers": [{"name": "1", "value": "4200.0"}]}}
+        ]}}}
+    })
+    em2 = ElectricityMeter(EnergyAccount(multi, "A-123"),
+                           {"id": "eid3", "serialNumber": "E-SER3", "isTradPrepay": False, "prepayLedgers": None})
+    await em2._update()
+    check("history seeded from api edges (3 entries)", len(em2.reading_history) == 3)
+    check("usage works right after seed", em2.get_usage_previous_day() == 6.181)
+    check("latest reading survives seed", em2.latest_reading == 4211.181)
+    check("seed respects date order", em2.reading_history[0]["date"] < em2.reading_history[-1]["date"])
+
     # Options plumbing
     api.accounts[0].apply_options({"gas_calorific_value": 39.5, "low_credit_pence": 150})
     check("options CV", api.accounts[0].gas_calorific_value == 39.5)

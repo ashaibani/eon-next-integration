@@ -1,8 +1,3 @@
-# E.ON Next integration client for Home Assistant.
-# Derivative work originally based on madmachinations/eon-next, with
-# extensive changes: coordinator architecture, prepay snapshot support,
-# tariff/rate windows, balance handling and error hardening.
-# Original project: https://github.com/madmachinations/eon-next
 #!/usr/bin/env python3
 
 import asyncio
@@ -1060,6 +1055,40 @@ class EnergyMeter:
             await self._update()
     
 
+    def _seed_history_from_edges(self, edges: list) -> None:
+        """Seed the daily history from every register reading the API
+        returned (up to 12), so usage estimates work immediately after a
+        restart instead of waiting for the next published reading. Edges
+        arrive newest-first; the history dedupes and sorts by date."""
+        for edge in edges:
+            node = edge.get('node') or {}
+            read_at = node.get('readAt')
+            if read_at == None:
+                continue
+            
+            try:
+                reading_date = self._convert_datetime_str_to_date(read_at)
+                value = float(node['registers'][0]['value'])
+            except (IndexError, KeyError, ValueError, TypeError):
+                continue
+            
+            entry = {"date": reading_date, "reading": value}
+            replaced = False
+            for existing in self.reading_history:
+                if existing["date"] == entry["date"]:
+                    existing["reading"] = entry["reading"]
+                    replaced = True
+                    break
+            
+            if replaced == False:
+                self.reading_history.append(entry)
+        
+        self.reading_history.sort(key=lambda e: e["date"])
+        
+        if len(self.reading_history) > READING_HISTORY_DAYS:
+            self.reading_history = self.reading_history[-READING_HISTORY_DAYS:]
+    
+
     def _record_reading_history(self) -> None:
         """Keep a short history of daily register values for usage estimates."""
         if self.latest_reading == None or self.latest_reading_date == None:
@@ -1163,6 +1192,7 @@ class ElectricityMeter(EnergyMeter):
 
         readings = result['data']['readings']['edges']
         if len(readings) > 0:
+            self._seed_history_from_edges(readings)
             self.latest_reading = float(readings[0]['node']['registers'][0]['value'])
             self.latest_reading_date = self._convert_datetime_str_to_date(readings[0]['node']['readAt'])
             self.last_updated = datetime.datetime.now()
@@ -1193,6 +1223,7 @@ class GasMeter(EnergyMeter):
 
         readings = result['data']['readings']['edges']
         if len(readings) > 0:
+            self._seed_history_from_edges(readings)
             self.latest_reading = float(readings[0]['node']['registers'][0]['value'])
             self.latest_reading_date = self._convert_datetime_str_to_date(readings[0]['node']['readAt'])
             self.last_updated = datetime.datetime.now()
