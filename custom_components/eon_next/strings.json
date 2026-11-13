@@ -8,9 +8,10 @@
             "user": {
                 "data": {
                     "email": "Email address",
-                    "password": "Password"
+                    "password": "Password",
+                    "api_key": "API Key"
                 },
-                "description": "Login to your E.ON Next account.",
+                "description": "Enter your E.ON Next API key, see the README for how to get it",
                 "title": "Login"
             }
         }
