@@ -76,8 +76,14 @@ folder and restart Home Assistant.
 
 ## Setup
 
-Settings -> Devices & Services -> Add Integration -> **E.ON Next** -> enter
-your email and password. Everything else is automatic.
+Settings -> Devices & Services -> Add Integration -> **E.ON Next** ->
+enter your API key. Everything else is automatic.
+
+EON have removed the ability to login via email directly so now we have to
+get an API Key. To do this, see the instructions
+[here](https://github.com/savagelands-net/homeassistant-eon-next#getting-an-api-key)
+which includes a helper script to retreive your API key.
+
 
 Bad credentials show "Authentication failed"; API problems show "Failed to
 connect" and retry with backoff.

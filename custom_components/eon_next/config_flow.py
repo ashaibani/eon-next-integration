@@ -31,6 +31,7 @@ _LOGGER = logging.getLogger(__name__)
 
 CONF_EMAIL = "email"
 CONF_PASSWORD = "password"
+CONF_API_KEY = "api_key"
 
 
 async def validate_credentials(hass, data: dict) -> dict:
@@ -41,8 +42,7 @@ async def validate_credentials(hass, data: dict) -> dict:
     api = EonNext()
 
     try:
-        success = await api.login_with_username_and_password(
-            data[CONF_EMAIL], data[CONF_PASSWORD], False)
+        success = await api.login_with_api_key(data[CONF_API_KEY])
     except EonNextApiError as exc:
         raise ValueError("cannot_connect") from exc
     finally:
@@ -78,8 +78,7 @@ class EonNextConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 return self.async_create_entry(title=info["title"], data=user_input)
 
         schema = vol.Schema({
-            vol.Required(CONF_EMAIL): cv.string,
-            vol.Required(CONF_PASSWORD): cv.string,
+            vol.Required(CONF_API_KEY): cv.string,
         })
 
         return self.async_show_form(step_id="user", data_schema=schema, errors=errors)

@@ -23,6 +23,7 @@ PLATFORMS = ["sensor", "binary_sensor", "calendar"]
 
 CONF_EMAIL = "email"
 CONF_PASSWORD = "password"
+CONF_API_KEY = "api_key"
 
 
 def _option_minutes(entry, key: str, default: int, minimum: int) -> int:
@@ -115,7 +116,7 @@ async def async_setup_entry(hass: HomeAssistant, entry):
     api = EonNext()
 
     try:
-        success = await api.login_with_username_and_password(entry.data[CONF_EMAIL], entry.data[CONF_PASSWORD])
+        success = await api.login_with_api_key(entry.data[CONF_API_KEY])
     except EonNextApiError as exc:
         await api.close()
         raise ConfigEntryNotReady("Could not reach the E.ON Next API") from exc

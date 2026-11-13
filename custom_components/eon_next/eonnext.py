@@ -231,6 +231,7 @@ class EonNext:
     def __init__(self):
         self.username = ""
         self.password = ""
+        self.api_key = ""
         self._session = None
         self._auth_lock = asyncio.Lock()
         self._last_balance_fetch = None
@@ -313,8 +314,8 @@ class EonNext:
         if self.__auth_token_is_valid() == False:
             if self.__refresh_token_is_valid() == True:
                 await self.__login_with_refresh_token()
-            elif self.username != "" and self.password != "":
-                await self.login_with_username_and_password(self.username, self.password, False)
+            elif self.api_key != "":
+                await self.login_with_api_key(self.api_key, False)
         
         if self.__auth_token_is_valid() == False:
             raise EonNextApiError("Unable to authenticate")
@@ -348,6 +349,30 @@ class EonNext:
         except aiohttp.ClientError as exc:
             raise EonNextApiError(operation + " request failed: " + str(exc)) from exc
     
+
+    async def login_with_api_key(self, apikey: str, initialise: bool = True) -> bool:
+        self.api_key = apikey
+
+        result = await self._graphql_post(
+            "loginApiKey",
+            "mutation loginApiKey($input: ObtainJSONWebTokenInput!) {obtainKrakenToken(input: $input) {    payload    refreshExpiresIn    refreshToken    token    __typename}}",
+            {
+                "input": {
+                    "APIKey": self.api_key
+                }
+            },
+            False
+        )
+
+        if self._json_contains_key_chain(result, ["data", "obtainKrakenToken", "token"]) == True:
+            self.__store_authentication(result['data']['obtainKrakenToken'])
+            if initialise == True:
+                await self.__init_accounts()
+            return True
+        else:
+            self.__reset_authentation()
+            return False
+
 
     async def login_with_username_and_password(self, username: str, password: str, initialise: bool = True) -> bool:
         self.username = username
